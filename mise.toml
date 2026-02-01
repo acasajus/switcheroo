@@ -1,0 +1,41 @@
+[tools]
+node = "latest"
+
+[tasks.install]
+description = "Install dependencies"
+run = """
+cd frontend && npm install
+"""
+
+[tasks.build-frontend]
+description = "Build the frontend"
+depends = ["install"]
+run = """
+cd frontend && npm run build
+"""
+
+[tasks.build-backend]
+description = "Build the backend"
+run = """
+cargo build --release
+"""
+
+[tasks.build]
+description = "Build everything (frontend + backend)"
+depends = ["build-frontend", "build-backend"]
+
+[tasks.dev]
+description = "Run in development mode"
+run = """
+# Run both in parallel (basic approach, better with a specialized tool like overmind/foreman but this works)
+(cd frontend && npm run dev) &
+cargo run
+wait
+"""
+
+[tasks.start]
+description = "Run the release build"
+depends = ["build"]
+run = """
+./target/release/switcheroo
+"""
