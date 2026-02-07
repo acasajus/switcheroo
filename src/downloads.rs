@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct DownloadState {
