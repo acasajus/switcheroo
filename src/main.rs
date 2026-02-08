@@ -126,30 +126,36 @@ async fn main() {
             // Wait a bit to avoid rate limits if many
             // tokio::time::sleep(Duration::from_millis(500)).await;
 
-            if let Some(saved_path) = metadata::download_image(&title_id, target_path).await {
-                // Update state
-                let mut games = games_img.lock().unwrap();
-                if let Some(game) = games.iter_mut().find(|g| g.path == game_path) {
-                    // Determine extension from saved path
-                    let ext = saved_path
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("jpg");
-                    let rel_url = format!("/images/{}.{}", title_id, ext);
+            let saved_path = match metadata::download_image(&title_id, target_path).await {
+                Some(p) => p,
+                None => continue,
+            };
 
-                    game.image_url = Some(rel_url);
+            // Update state
+            let mut games = games_img.lock().unwrap();
+            let game = match games.iter_mut().find(|g| g.path == game_path) {
+                Some(g) => g,
+                None => continue,
+            };
 
-                    // Notify frontend to refresh games list
-                    let _ = tx_img.send(
-                        serde_json::json!({
-                            "type": "scan",
-                            "status": "image_updated",
-                            "count": 0 // Dummy
-                        })
-                        .to_string(),
-                    );
-                }
-            }
+            // Determine extension from saved path
+            let ext = saved_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("jpg");
+            let rel_url = format!("/images/{}.{}", title_id, ext);
+
+            game.image_url = Some(rel_url);
+
+            // Notify frontend to refresh games list
+            let _ = tx_img.send(
+                serde_json::json!({
+                    "type": "scan",
+                    "status": "image_updated",
+                    "count": 0 // Dummy
+                })
+                .to_string(),
+            );
         }
     });
 
@@ -178,31 +184,35 @@ async fn main() {
         let mut total_count = 0;
 
         for entry in WalkDir::new(&games_dir).into_iter().filter_map(|e| e.ok()) {
-            if let Some(game) = process_entry(entry.path(), &games_dir, &data_dir_scan) {
-                // Queue image download if needed
-                if game.image_url.is_none()
-                    && let Some(ref tid) = game.title_id {
-                        let _ = img_tx_scan.blocking_send((tid.clone(), game.path.clone()));
-                    }
+            let game = match process_entry(entry.path(), &games_dir, &data_dir_scan) {
+                Some(g) => g,
+                None => continue,
+            };
 
-                batch.push(game);
-                total_count += 1;
-
-                // Update batch every 50 items to keep UI responsive but performant
-                if batch.len() >= 50 {
-                    let mut g_lock = games_clone.lock().unwrap();
-                    g_lock.extend(batch.drain(..));
-                    drop(g_lock); // Release lock immediately
-
-                    let _ = tx_scan.send(
-                        serde_json::json!({
-                            "type": "scan",
-                            "status": "scanning",
-                            "count": total_count
-                        })
-                        .to_string(),
-                    );
+            // Queue image download if needed
+            if game.image_url.is_none() {
+                if let Some(ref tid) = game.title_id {
+                    let _ = img_tx_scan.blocking_send((tid.clone(), game.path.clone()));
                 }
+            }
+
+            batch.push(game);
+            total_count += 1;
+
+            // Update batch every 50 items to keep UI responsive but performant
+            if batch.len() >= 50 {
+                let mut g_lock = games_clone.lock().unwrap();
+                g_lock.extend(batch.drain(..));
+                drop(g_lock); // Release lock immediately
+
+                let _ = tx_scan.send(
+                    serde_json::json!({
+                        "type": "scan",
+                        "status": "scanning",
+                        "count": total_count
+                    })
+                    .to_string(),
+                );
             }
         }
 
@@ -254,16 +264,21 @@ async fn main() {
             // Clean up finished downloads from local map
             last_bytes_map.retain(|k, _| current_ids.contains(k));
 
-            if !downloads.is_empty()
-                && let Ok(data_json) = serde_json::to_value(&*downloads)
-            {
-                let msg = serde_json::json!({
-                    "type": "downloads",
-                    "data": data_json
-                })
-                .to_string();
-                let _ = tx_clone.send(msg);
+            if downloads.is_empty() {
+                continue;
             }
+
+            let data_json = match serde_json::to_value(&*downloads) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            let msg = serde_json::json!({
+                "type": "downloads",
+                "data": data_json
+            })
+            .to_string();
+            let _ = tx_clone.send(msg);
         }
     });
 
@@ -294,112 +309,161 @@ async fn main() {
         info!("File watcher started for: {:?}", games_dir_watch);
 
         for res in std_rx {
-            match res {
-                Ok(event) => {
-                    match event.kind {
-                        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
-                            // Renaming: paths[0] is from, paths[1] is to
-                            if event.paths.len() == 2 {
-                                let from = &event.paths[0];
-                                let to = &event.paths[1];
+            let event = match res {
+                Ok(e) => e,
 
-                                let mut games = games_watch.lock().unwrap();
-                                // Remove old
-                                if let Some(idx) = games.iter().position(|g| g.path == *from) {
-                                    games.remove(idx);
-                                    let _ = tx_watch.send(
-                                        serde_json::json!({
-                                           "type": "scan",
-                                           "status": "remove",
-                                           "path": from
-                                        })
-                                        .to_string(),
-                                    );
-                                }
-                                drop(games); // release lock before processing new
+                Err(e) => {
+                    error!("Watch error: {:?}", e);
 
-                                // Add new
-                                if let Some(game) =
-                                    process_entry(to, &games_dir_watch, &data_dir_watch)
-                                {
-                                    // Queue image
-                                    if game.image_url.is_none()
-                                        && let Some(ref tid) = game.title_id {
-                                            let _ = img_tx_watch
-                                                .blocking_send((tid.clone(), game.path.clone()));
-                                        }
+                    continue;
+                }
+            };
 
-                                    let mut games = games_watch.lock().unwrap();
-                                    games.push(game.clone());
-                                    let _ = tx_watch.send(
-                                        serde_json::json!({
-                                           "type": "scan",
-                                           "status": "update",
-                                           "game": game
-                                        })
-                                        .to_string(),
-                                    );
-                                }
+            match event.kind {
+                EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+                    // Renaming: paths[0] is from, paths[1] is to
+
+                    if event.paths.len() != 2 {
+                        continue;
+                    }
+
+                    let from = &event.paths[0];
+
+                    let to = &event.paths[1];
+
+                    let mut games = games_watch.lock().unwrap();
+
+                    // Remove old
+
+                    if let Some(idx) = games.iter().position(|g| g.path == *from) {
+                        games.remove(idx);
+
+                        let _ = tx_watch.send(
+                            serde_json::json!({
+
+                               "type": "scan",
+
+                               "status": "remove",
+
+                               "path": from
+
+                            })
+                            .to_string(),
+                        );
+                    }
+
+                    drop(games); // release lock before processing new
+
+                    // Add new
+
+                    let game = match process_entry(to, &games_dir_watch, &data_dir_watch) {
+                        Some(g) => g,
+
+                        None => continue,
+                    };
+
+                    // Queue image
+
+                    if game.image_url.is_none() {
+                        if let Some(ref tid) = game.title_id {
+                            let _ = img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
+                        }
+                    }
+
+                    let mut games = games_watch.lock().unwrap();
+
+                    games.push(game.clone());
+
+                    let _ = tx_watch.send(
+                        serde_json::json!({
+
+                           "type": "scan",
+
+                           "status": "update",
+
+                           "game": game
+
+                        })
+                        .to_string(),
+                    );
+                }
+
+                EventKind::Create(_) | EventKind::Modify(_) => {
+                    for path in event.paths {
+                        if !path.is_file() {
+                            continue;
+                        }
+
+                        let game = match process_entry(&path, &games_dir_watch, &data_dir_watch) {
+                            Some(g) => g,
+
+                            None => continue,
+                        };
+
+                        info!("Watcher: Game detected/updated: {}", game.name);
+
+                        // Queue image download if new and missing
+
+                        if game.image_url.is_none() {
+                            if let Some(ref tid) = game.title_id {
+                                let _ =
+                                    img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
                             }
                         }
-                        EventKind::Create(_) | EventKind::Modify(_) => {
-                            for path in event.paths {
-                                if path.is_file()
-                                    && let Some(game) =
-                                        process_entry(&path, &games_dir_watch, &data_dir_watch)
-                                    {
-                                        info!("Watcher: Game detected/updated: {}", game.name);
 
-                                        // Queue image download if new and missing
-                                        if game.image_url.is_none()
-                                            && let Some(ref tid) = game.title_id {
-                                                let _ = img_tx_watch.blocking_send((
-                                                    tid.clone(),
-                                                    game.path.clone(),
-                                                ));
-                                            }
+                        let mut games = games_watch.lock().unwrap();
 
-                                        let mut games = games_watch.lock().unwrap();
-                                        if let Some(idx) =
-                                            games.iter().position(|g| g.path == game.path)
-                                        {
-                                            games[idx] = game.clone();
-                                        } else {
-                                            games.push(game.clone());
-                                        }
-
-                                        let _ = tx_watch.send(
-                                            serde_json::json!({
-                                               "type": "scan",
-                                               "status": "update",
-                                               "game": game
-                                            })
-                                            .to_string(),
-                                        );
-                                    }
-                            }
+                        if let Some(idx) = games.iter().position(|g| g.path == game.path) {
+                            games[idx] = game.clone();
+                        } else {
+                            games.push(game.clone());
                         }
-                        EventKind::Remove(_) => {
-                            for path in event.paths {
-                                let mut games = games_watch.lock().unwrap();
-                                if let Some(idx) = games.iter().position(|g| g.path == path) {
-                                    let removed = games.remove(idx);
-                                    info!("Watcher: Game removed: {}", removed.name);
-                                    let _ = tx_watch.send(
-                                        serde_json::json!({
-                                           "type": "scan",
-                                           "status": "remove",
-                                           "path": path
-                                        })
-                                        .to_string(),
-                                    );
-                                }
-                            }
-                        }
-                        _ => {}
+
+                        let _ = tx_watch.send(
+                            serde_json::json!({
+
+                               "type": "scan",
+
+                               "status": "update",
+
+                               "game": game
+
+                            })
+                            .to_string(),
+                        );
                     }
                 }
-                Err(e) => error!("Watch error: {:?}", e),
+
+                EventKind::Remove(_) => {
+                    for path in event.paths {
+                        let mut games = games_watch.lock().unwrap();
+
+                        let idx = match games.iter().position(|g| g.path == path) {
+                            Some(i) => i,
+
+                            None => continue,
+                        };
+
+                        let removed = games.remove(idx);
+
+                        info!("Watcher: Game removed: {}", removed.name);
+
+                        let _ = tx_watch.send(
+                            serde_json::json!({
+
+                               "type": "scan",
+
+                               "status": "remove",
+
+                               "path": path
+
+                            })
+                            .to_string(),
+                        );
+                    }
+                }
+
+                _ => {}
             }
         }
     });
@@ -504,87 +568,84 @@ async fn download_file(
         return Err((axum::http::StatusCode::FORBIDDEN, "Forbidden"));
     }
 
-    match File::open(&file_path).await {
-        Ok(file) => {
-            let metadata = file.metadata().await.unwrap();
-            let total_size = metadata.len();
-            let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
-
-            let download_id = Uuid::new_v4().to_string();
-            info!("Starting download: {} (ID: {})", filename, download_id);
-
-            {
-                let mut downloads = state.downloads.lock().unwrap();
-                downloads.insert(
-                    download_id.clone(),
-                    DownloadState {
-                        id: download_id.clone(),
-                        filename: filename.clone(),
-                        total_size,
-                        bytes_sent: 0,
-                        speed: 0,
-                    },
-                );
-            }
-
-            let stream = ReaderStream::new(file);
-            let downloads_clone = state.downloads.clone();
-            let id_clone = download_id.clone();
-
-            let stream = stream.map(move |chunk: Result<Bytes, std::io::Error>| {
-                if let Ok(bytes) = &chunk {
-                    let len = bytes.len() as u64;
-                    if let Ok(mut downloads) = downloads_clone.lock()
-                        && let Some(download) = downloads.get_mut(&id_clone)
-                    {
-                        download.bytes_sent += len;
-                    }
-                }
-                chunk
-            });
-
-            let body = Body::from_stream(stream);
-
-            let mut headers = HeaderMap::new();
-
-            // Determine content type based on extension
-            let content_type = match std::path::Path::new(&filename)
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_lowercase())
-                .as_deref()
-            {
-                Some("jpg") | Some("jpeg") => "image/jpeg",
-                Some("png") => "image/png",
-                Some("webp") => "image/webp",
-                Some("gif") => "image/gif",
-                Some("svg") => "image/svg+xml",
-                _ => "application/octet-stream",
-            };
-
-            headers.insert(CONTENT_TYPE, HeaderValue::from_str(content_type).unwrap());
-
-            // Only set attachment disposition if it's not an image (or if we want to force download for everything else)
-            // For now, let's keep attachment for non-images to be safe, or just always set it for game files.
-            // Actually, for images to work in <img src="...">, we probably don't want Content-Disposition: attachment.
-            if content_type == "application/octet-stream"
-                && let Ok(val) =
-                    HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
-                {
-                    headers.insert(CONTENT_DISPOSITION, val);
-                }
-
-            if let Ok(val) = HeaderValue::from_str(&total_size.to_string()) {
-                headers.insert(CONTENT_LENGTH, val);
-            }
-
-            Ok((headers, body))
-        }
+    let file = match File::open(&file_path).await {
+        Ok(f) => f,
         Err(e) => {
             error!("File download failed: {} (Path: {:?})", e, file_path);
-            Err((axum::http::StatusCode::NOT_FOUND, "File not found"))
+            return Err((axum::http::StatusCode::NOT_FOUND, "File not found"));
+        }
+    };
+
+    let metadata = file.metadata().await.unwrap();
+    let total_size = metadata.len();
+    let filename = file_path.file_name().unwrap().to_string_lossy().to_string();
+
+    let download_id = Uuid::new_v4().to_string();
+    info!("Starting download: {} (ID: {})", filename, download_id);
+
+    {
+        let mut downloads = state.downloads.lock().unwrap();
+        downloads.insert(
+            download_id.clone(),
+            DownloadState {
+                id: download_id.clone(),
+                filename: filename.clone(),
+                total_size,
+                bytes_sent: 0,
+                speed: 0,
+            },
+        );
+    }
+
+    let stream = ReaderStream::new(file);
+    let downloads_clone = state.downloads.clone();
+    let id_clone = download_id.clone();
+
+    let stream = stream.map(move |chunk: Result<Bytes, std::io::Error>| {
+        if let Ok(bytes) = &chunk {
+            let len = bytes.len() as u64;
+            if let Ok(mut downloads) = downloads_clone.lock() {
+                if let Some(download) = downloads.get_mut(&id_clone) {
+                    download.bytes_sent += len;
+                }
+            }
+        }
+        chunk
+    });
+
+    let body = Body::from_stream(stream);
+
+    let mut headers = HeaderMap::new();
+
+    // Determine content type based on extension
+    let content_type = match std::path::Path::new(&filename)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+
+    headers.insert(CONTENT_TYPE, HeaderValue::from_str(content_type).unwrap());
+
+    // Only set attachment disposition if it's not an image (or if we want to force download for everything else)
+    if content_type == "application/octet-stream" {
+        if let Ok(val) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename)) {
+            headers.insert(CONTENT_DISPOSITION, val);
         }
     }
+
+    if let Ok(val) = HeaderValue::from_str(&total_size.to_string()) {
+        headers.insert(CONTENT_LENGTH, val);
+    }
+
+    Ok((headers, body))
 }
 
 fn encode_path(path: &str) -> String {

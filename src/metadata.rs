@@ -44,56 +44,66 @@ pub async fn download_image(title_id: &str, target_path: PathBuf) -> Option<Path
 
             info!("Trying to fetch image from: {}", url);
 
-            match client.get(&url).send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        let content_type = resp
-                            .headers()
-                            .get("content-type")
-                            .and_then(|h| h.to_str().ok())
-                            .unwrap_or("");
-
-                        // Determine extension from content-type or url
-                        let ext = if content_type.contains("png") {
-                            "png"
-                        } else if content_type.contains("jpeg") || content_type.contains("jpg") {
-                            "jpg"
-                        } else {
-                            // Default fallback
-                            "jpg"
-                        };
-
-                        let final_path = target_path.with_extension(ext);
-
-                        // Write to file
-                        match File::create(&final_path).await {
-                            Ok(mut file) => {
-                                let mut stream = resp.bytes_stream();
-                                while let Some(item) = stream.next().await {
-                                    if let Ok(chunk) = item
-                                        && let Err(e) = file.write_all(&chunk).await {
-                                            error!("Failed to write image data: {}", e);
-                                            return None;
-                                        }
-                                }
-                                info!(
-                                    "Downloaded image for {} (using ID: {}) to {:?}",
-                                    title_id, id, final_path
-                                );
-                                return Some(final_path);
-                            }
-                            Err(e) => {
-                                error!("Failed to create image file: {}", e);
-                            }
-                        }
-                    } else {
-                        debug!("Source {} returned status {}", url, resp.status());
-                    }
-                }
+            let resp = match client.get(&url).send().await {
+                Ok(r) => r,
                 Err(e) => {
                     warn!("Request failed for {}: {}", url, e);
+                    continue;
+                }
+            };
+
+            if !resp.status().is_success() {
+                debug!("Source {} returned status {}", url, resp.status());
+                continue;
+            }
+
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("");
+
+            // Determine extension from content-type or url
+            let ext = if content_type.contains("png") {
+                "png"
+            } else if content_type.contains("jpeg") || content_type.contains("jpg") {
+                "jpg"
+            } else {
+                // Default fallback
+                "jpg"
+            };
+
+            let final_path = target_path.with_extension(ext);
+
+            // Write to file
+            let mut file = match File::create(&final_path).await {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("Failed to create image file: {}", e);
+                    continue;
+                }
+            };
+
+            let mut stream = resp.bytes_stream();
+            while let Some(item) = stream.next().await {
+                let chunk = match item {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Failed to read image stream: {}", e);
+                        return None;
+                    }
+                };
+
+                if let Err(e) = file.write_all(&chunk).await {
+                    error!("Failed to write image data: {}", e);
+                    return None;
                 }
             }
+            info!(
+                "Downloaded image for {} (using ID: {}) to {:?}",
+                title_id, id, final_path
+            );
+            return Some(final_path);
         }
     }
 

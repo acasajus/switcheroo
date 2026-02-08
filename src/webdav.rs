@@ -33,45 +33,51 @@ pub async fn webdav_handler(
     req: Request<Body>,
 ) -> impl IntoResponse {
     // Check authentication if configured
-    if let (Some(username), Some(password)) = (
+    let (username, password) = match (
         &state.settings.webdav_username,
         &state.settings.webdav_password,
     ) {
-        let auth_header = req.headers().get("Authorization");
+        (Some(u), Some(p)) => (u, p),
+        _ => return state.handler.handle(req).await.into_response(),
+    };
 
-                let authorized = if let Some(header_val) = auth_header {
+    let unauthorized = || {
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .header("WWW-Authenticate", "Basic realm=\"Switcheroo WebDAV\"")
+            .body(Body::empty())
+            .unwrap()
+            .into_response()
+    };
 
-                    if let Ok(auth_str) = header_val.to_str() {
+    let header_val = match req.headers().get("Authorization") {
+        Some(h) => h,
+        None => return unauthorized(),
+    };
 
-                        if let Some(token) = auth_str.strip_prefix("Basic ") {
+    let auth_str = match header_val.to_str() {
+        Ok(s) => s,
+        Err(_) => return unauthorized(),
+    };
 
-                            if let Ok(decoded) = general_purpose::STANDARD.decode(token) {
+    let token = match auth_str.strip_prefix("Basic ") {
+        Some(t) => t,
+        None => return unauthorized(),
+    };
 
-                                if let Ok(creds) = String::from_utf8(decoded) {
+    let decoded = match general_purpose::STANDARD.decode(token) {
+        Ok(d) => d,
+        Err(_) => return unauthorized(),
+    };
 
-                                     let expected = format!("{}:{}", username, password);
+    let creds = match String::from_utf8(decoded) {
+        Ok(c) => c,
+        Err(_) => return unauthorized(),
+    };
 
-                                     creds == expected
-
-                                } else { false }
-
-                            } else { false }
-
-                        } else { false }
-
-                    } else { false }
-
-                } else { false };
-
-        
-
-        if !authorized {
-            return Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .header("WWW-Authenticate", "Basic realm=\"Switcheroo WebDAV\"")
-                .body(Body::empty())
-                .unwrap();
-        }
+    let expected = format!("{}:{}", username, password);
+    if creds != expected {
+        return unauthorized();
     }
 
     state.handler.handle(req).await.into_response()
