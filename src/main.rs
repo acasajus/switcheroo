@@ -190,10 +190,10 @@ async fn main() {
             };
 
             // Queue image download if needed
-            if game.image_url.is_none() {
-                if let Some(ref tid) = game.title_id {
-                    let _ = img_tx_scan.blocking_send((tid.clone(), game.path.clone()));
-                }
+            if game.image_url.is_none()
+                && let Some(ref tid) = game.title_id
+            {
+                let _ = img_tx_scan.blocking_send((tid.clone(), game.path.clone()));
             }
 
             batch.push(game);
@@ -364,10 +364,10 @@ async fn main() {
 
                     // Queue image
 
-                    if game.image_url.is_none() {
-                        if let Some(ref tid) = game.title_id {
-                            let _ = img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
-                        }
+                    if game.image_url.is_none()
+                        && let Some(ref tid) = game.title_id
+                    {
+                        let _ = img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
                     }
 
                     let mut games = games_watch.lock().unwrap();
@@ -404,11 +404,10 @@ async fn main() {
 
                         // Queue image download if new and missing
 
-                        if game.image_url.is_none() {
-                            if let Some(ref tid) = game.title_id {
-                                let _ =
-                                    img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
-                            }
+                        if game.image_url.is_none()
+                            && let Some(ref tid) = game.title_id
+                        {
+                            let _ = img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
                         }
 
                         let mut games = games_watch.lock().unwrap();
@@ -604,10 +603,10 @@ async fn download_file(
     let stream = stream.map(move |chunk: Result<Bytes, std::io::Error>| {
         if let Ok(bytes) = &chunk {
             let len = bytes.len() as u64;
-            if let Ok(mut downloads) = downloads_clone.lock() {
-                if let Some(download) = downloads.get_mut(&id_clone) {
-                    download.bytes_sent += len;
-                }
+            if let Ok(mut downloads) = downloads_clone.lock()
+                && let Some(download) = downloads.get_mut(&id_clone)
+            {
+                download.bytes_sent += len;
             }
         }
         chunk
@@ -635,10 +634,10 @@ async fn download_file(
     headers.insert(CONTENT_TYPE, HeaderValue::from_str(content_type).unwrap());
 
     // Only set attachment disposition if it's not an image (or if we want to force download for everything else)
-    if content_type == "application/octet-stream" {
-        if let Ok(val) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename)) {
-            headers.insert(CONTENT_DISPOSITION, val);
-        }
+    if content_type == "application/octet-stream"
+        && let Ok(val) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", filename))
+    {
+        headers.insert(CONTENT_DISPOSITION, val);
     }
 
     if let Ok(val) = HeaderValue::from_str(&total_size.to_string()) {
