@@ -10,7 +10,9 @@ pub struct Game {
     pub format: String,
     pub title_id: Option<String>,
     pub version: Option<String>,
+    pub latest_version: Option<String>,
     pub category: String, // "Base", "Update", "DLC"
+    pub publisher: Option<String>,
     pub image_url: Option<String>,
 }
 
@@ -47,7 +49,7 @@ fn parse_filename(filename: &str) -> (String, Option<String>, Option<String>, St
 
         // Heuristics
         if content.len() == 16 && content.chars().all(|c| c.is_ascii_hexdigit()) {
-            title_id = Some(content.to_string());
+            title_id = Some(content.to_uppercase());
             continue;
         }
 
@@ -85,7 +87,12 @@ fn parse_filename(filename: &str) -> (String, Option<String>, Option<String>, St
     (final_name, title_id, version, category)
 }
 
-pub fn process_entry(path: &Path, root_dir: &Path, data_dir: &Path) -> Option<Game> {
+pub fn process_entry(
+    path: &Path,
+    root_dir: &Path,
+    data_dir: &Path,
+    metadata: Option<&crate::metadata::MetadataProvider>,
+) -> Option<Game> {
     let valid_extensions = ["nsp", "nsz", "xci", "xcz"];
 
     if !path.is_file() {
@@ -109,7 +116,20 @@ pub fn process_entry(path: &Path, root_dir: &Path, data_dir: &Path) -> Option<Ga
         .to_string_lossy()
         .to_string();
 
-    let (name, title_id, version, category) = parse_filename(&filename);
+    let (mut name, title_id, version, category) = parse_filename(&filename);
+    let mut publisher = None;
+    let mut latest_version = None;
+
+    // Enhance info from metadata provider if available
+    if let (Some(provider), Some(tid)) = (metadata, title_id.as_ref()) {
+        if let Some(info) = provider.get_title_info(tid) {
+            if let Some(ref n) = info.name {
+                name = n.clone();
+            }
+            publisher = info.publisher.clone();
+        }
+        latest_version = provider.get_latest_version(tid);
+    }
 
     // Check for image
     let mut image_url = None;
@@ -137,10 +157,6 @@ pub fn process_entry(path: &Path, root_dir: &Path, data_dir: &Path) -> Option<Ga
                     .unwrap_or(&img_path)
                     .to_string_lossy()
                     .to_string();
-                // This assumes the frontend can handle relative paths from the games mount
-                // We might need to prefix this with /files/ or similar if we change how things are served.
-                // But based on previous code, it just returned the relative path.
-                // Let's assume the frontend knows what to do or we fix it in main.
                 image_url = Some(rel_img);
                 break;
             }
@@ -155,7 +171,9 @@ pub fn process_entry(path: &Path, root_dir: &Path, data_dir: &Path) -> Option<Ga
         format: ext.to_lowercase(),
         title_id,
         version,
+        latest_version,
         category,
+        publisher,
         image_url,
     })
 }

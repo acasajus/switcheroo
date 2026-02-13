@@ -9,7 +9,9 @@ interface Game {
   format: string;
   title_id?: string;
   version?: string;
+  latest_version?: string;
   category: string; // "Base", "Update", "DLC"
+  publisher?: string;
   image_url?: string;
 }
 
@@ -39,13 +41,19 @@ interface DownloadUpdate {
     data: Record<string, Download>;
 }
 
-type SSEMessage = ScanStatus | DownloadUpdate;
+interface SyncStatus {
+    type: "sync";
+    status: "complete";
+}
+
+type SSEMessage = ScanStatus | DownloadUpdate | SyncStatus;
 
 // --- State ---
 let games: Game[] = [];
 let groupedGames: GroupedGame[] = [];
 let activeDownloads: Record<string, Download> = {};
 let scanStatus: ScanStatus | null = null;
+let isSyncing = false;
 let showConnectionModal = false;
 let serverInfo: { ips: string[], port: number, webdav_enabled: boolean, webdav_auth: boolean } | null = null;
 
@@ -160,6 +168,11 @@ function setupSSE() {
                 if (msg.status === "complete" || (msg.count > 0 && msg.count % 20 === 0)) {
                     fetchGames();
                 }
+            } else if (msg.type === "sync") {
+                if (msg.status === "complete") {
+                    isSyncing = false;
+                    fetchGames();
+                }
             }
         } catch (e) {
             console.error("Error parsing SSE", e);
@@ -188,6 +201,12 @@ const Navbar = () => `
             </div>
             
             <div class="flex items-center gap-4">
+                ${isSyncing ? `
+                    <div class="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-full border border-amber-500/20 animate-pulse">
+                        Syncing Metadata...
+                    </div>
+                ` : ''}
+
                 ${scanStatus ? (
                     scanStatus.status === 'scanning' ? `
                     <div class="hidden md:flex items-center gap-2 text-xs text-blue-400 bg-blue-500/10 px-3 py-1.5 rounded-full border border-blue-500/20 animate-pulse">
@@ -207,6 +226,10 @@ const Navbar = () => `
                     `
                 ) : ''}
                 
+                <button onclick="window.syncMetadata()" class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors border border-transparent ${isSyncing ? 'animate-spin opacity-50 pointer-events-none' : ''}" title="Sync Metadata">
+                    ${Icons.Refresh}
+                </button>
+
                 <button onclick="window.toggleModal()" class="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors border border-slate-700">
                     ${Icons.Wifi}
                     <span class="hidden sm:inline">Connect</span>
@@ -292,7 +315,9 @@ const GameList = () => {
 
     return `
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6">
-            ${groupedGames.map(group => `
+            ${groupedGames.map(group => {
+                const publisher = group.files[0]?.publisher;
+                return `
                 <div class="group bg-slate-900 rounded-xl border border-slate-800 hover:border-indigo-500/30 transition-all hover:shadow-xl hover:shadow-indigo-500/10 overflow-hidden flex flex-col">
                     
                     <!-- Cover Image Area -->
@@ -307,13 +332,18 @@ const GameList = () => {
                         
                         <div class="absolute bottom-0 left-0 p-4 w-full">
                             <h3 class="font-bold text-lg text-white leading-tight line-clamp-2 drop-shadow-md">${group.title}</h3>
-                            <div class="text-xs text-slate-400 mt-1">${group.files.length} files • ${formatBytes(group.totalSize)}</div>
+                            <div class="flex items-center justify-between mt-1">
+                                <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold truncate pr-2">${publisher || 'Unknown Publisher'}</div>
+                                <div class="text-[10px] text-slate-500 font-mono">${group.files.length} files • ${formatBytes(group.totalSize)}</div>
+                            </div>
                         </div>
                     </div>
 
                     <!-- File List -->
                     <div class="flex-1 p-2 space-y-1 overflow-y-auto max-h-[300px] scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-                        ${group.files.map(file => `
+                        ${group.files.map(file => {
+                            const hasUpdate = file.latest_version && file.version && parseInt(file.latest_version) > parseInt(file.version);
+                            return `
                             <div class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-800/50 transition-colors group/file">
                                 <div class="flex-1 min-w-0">
                                     <div class="flex items-center gap-2 mb-1">
@@ -322,7 +352,12 @@ const GameList = () => {
                                         </span>
                                         ${file.version ? `
                                             <span class="text-[10px] font-mono text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded">
-                                                ${file.version}
+                                                v${file.version}
+                                            </span>
+                                        ` : ''}
+                                        ${hasUpdate ? `
+                                            <span class="text-[10px] font-bold text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded border border-orange-500/20" title="Latest: v${file.latest_version}">
+                                                Update Available
                                             </span>
                                         ` : ''}
                                         <span class="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${getFormatColor(file.format)}">
@@ -341,10 +376,10 @@ const GameList = () => {
                                     </a>
                                 </div>
                             </div>
-                        `).join('')}
+                        `}).join('')}
                     </div>
                 </div>
-            `).join('')}
+            `}).join('')}
         </div>
     `;
 }
@@ -476,8 +511,22 @@ function render() {
 declare global {
     interface Window {
         toggleModal: () => void;
+        syncMetadata: () => void;
     }
 }
+
+window.syncMetadata = async () => {
+    if (isSyncing) return;
+    isSyncing = true;
+    render();
+    try {
+        await fetch('/api/sync');
+    } catch (e) {
+        console.error("Failed to trigger sync", e);
+        isSyncing = false;
+        render();
+    }
+};
 
 window.toggleModal = () => {
     showConnectionModal = !showConnectionModal;

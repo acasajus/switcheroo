@@ -1,44 +1,35 @@
 use crate::config::Settings;
 use axum::{
     body::Body,
-    extract::State,
     http::{Request, Response, StatusCode},
     response::IntoResponse,
 };
 use base64::{Engine as _, engine::general_purpose};
 use dav_server::{DavHandler, localfs::LocalFs};
-use std::sync::Arc;
 
-#[derive(Clone)]
-pub struct WebDavState {
-    handler: DavHandler,
-    settings: Settings,
-}
-
-impl WebDavState {
-    pub fn new(settings: Settings) -> Self {
-        let dir = settings.games_dir.clone();
-        let handler = DavHandler::builder()
-            .filesystem(LocalFs::new(dir, false, false, false))
-            .locksystem(dav_server::memls::MemLs::new())
-            .strip_prefix("/dav")
-            .build_handler();
-
-        Self { handler, settings }
-    }
+pub fn create_dav_handler(settings: &Settings) -> DavHandler {
+    let dir = settings.games_dir.clone();
+    DavHandler::builder()
+        .filesystem(LocalFs::new(dir, false, false, false))
+        .locksystem(dav_server::memls::MemLs::new())
+        .strip_prefix("/dav")
+        .build_handler()
 }
 
 pub async fn webdav_handler(
-    State(state): State<Arc<WebDavState>>,
+    settings: Settings,
+    dav_handler: DavHandler,
     req: Request<Body>,
 ) -> impl IntoResponse {
+    tracing::info!("WebDAV Request: {} {}", req.method(), req.uri());
+
     // Check authentication if configured
     let (username, password) = match (
-        &state.settings.webdav_username,
-        &state.settings.webdav_password,
+        &settings.webdav_username,
+        &settings.webdav_password,
     ) {
         (Some(u), Some(p)) => (u, p),
-        _ => return state.handler.handle(req).await.into_response(),
+        _ => return dav_handler.handle(req).await.into_response(),
     };
 
     let unauthorized = || {
@@ -80,5 +71,5 @@ pub async fn webdav_handler(
         return unauthorized();
     }
 
-    state.handler.handle(req).await.into_response()
+    dav_handler.handle(req).await.into_response()
 }

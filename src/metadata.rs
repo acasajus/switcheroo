@@ -1,30 +1,168 @@
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, info, warn};
 
 const IMAGE_SOURCES: &[&str] = &[
-    "https://raw.githubusercontent.com/mxm-madscience/switch-games/master/images/{id}.jpg",
-    "https://raw.githubusercontent.com/TheGameratorT/Switch-Icons/main/icons/{id}.jpg",
-    "https://raw.githubusercontent.com/sblantipodi/switch_icon_db/main/icons/{id}.jpg",
-    "https://tinfoil.media/title/{id}/0",
+    "https://api.nlib.cc/nx/{id}/icon",
+    "https://raw.githubusercontent.com/BigOnYa/titledb/main/icons/{id}.png",
+    "https://raw.githubusercontent.com/CensoredTheInvisable/titledb/main/icons/{id}.png",
 ];
 
-fn get_base_id(title_id: &str) -> Option<String> {
-    if let Ok(id) = u64::from_str_radix(title_id, 16) {
-        // Simple heuristic: if it's an update, the base ID is usually the same with the last 3 digits cleared (roughly)
-        // or specifically masking out the type.
-        // Base Game: ending in 000, 200, 400, 600, 800, A00, C00, E00?
-        // Actually, Updates usually add 0x800 to the base?
-        // Let's try the standard mask for Application ID vs AddOn/Update.
-        // ApplicationId = TitleId & 0xFFFFFFFFFFFFE000
-        let base_id = id & 0xFFFFFFFFFFFFE000;
-        let base_id_str = format!("{:016X}", base_id);
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct TitleInfo {
+    pub id: String,
+    pub name: Option<String>,
+    pub icon_url: Option<String>,
+    pub banner_url: Option<String>,
+    pub category: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub publisher: Option<String>,
+}
 
-        if base_id_str != title_id.to_uppercase() {
-            return Some(base_id_str);
+pub struct MetadataProvider {
+    pub data_dir: PathBuf,
+    pub region: String,
+    pub language: String,
+    titles: HashMap<String, TitleInfo>,
+    versions: HashMap<String, HashMap<String, String>>, // TitleID -> {Version: Date}
+}
+
+impl MetadataProvider {
+    pub async fn new(data_dir: PathBuf, region: String, language: String) -> Self {
+        Self {
+            data_dir,
+            region,
+            language,
+            titles: HashMap::new(),
+            versions: HashMap::new(),
         }
+    }
+
+    pub async fn init(&mut self) {
+        self.load_local_data().await;
+    }
+
+    async fn load_local_data(&mut self) {
+        let titles_path = self
+            .data_dir
+            .join("titledb")
+            .join(format!("{}.{}.json", self.region, self.language));
+        if titles_path.exists() {
+            info!("Loading local titles database from {:?}", titles_path);
+            let content = tokio::fs::read_to_string(&titles_path).await.unwrap_or_default();
+            if !content.is_empty() {
+                let titles = tokio::task::spawn_blocking(move || {
+                    let mut map = HashMap::new();
+                    if let Ok(data) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&content) {
+                        for (id, val) in data {
+                            let info = TitleInfo {
+                                id: id.clone(),
+                                name: val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                icon_url: val.get("iconUrl").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                banner_url: val.get("bannerUrl").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                category: val.get("category").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()),
+                                description: val.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                publisher: val.get("publisher").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            };
+                            map.insert(id.to_uppercase(), info);
+                        }
+                    }
+                    map
+                }).await.unwrap_or_default();
+                self.titles = titles;
+            }
+        }
+
+        let versions_path = self.data_dir.join("titledb").join("versions.json");
+        if versions_path.exists() {
+            info!("Loading local versions database from {:?}", versions_path);
+            if let Ok(content) = tokio::fs::read_to_string(&versions_path).await
+                && let Ok(data) =
+                    serde_json::from_str::<HashMap<String, HashMap<String, String>>>(&content)
+            {
+                self.versions = data;
+            }
+        }
+    }
+
+    pub async fn sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let titledb_dir = self.data_dir.join("titledb");
+        if !titledb_dir.exists() {
+            info!("Creating titledb directory: {:?}", titledb_dir);
+            tokio::fs::create_dir_all(&titledb_dir).await?;
+        }
+
+        let client = reqwest::Client::new();
+
+        // Sync versions.json
+        info!("Syncing versions.json...");
+        match client.get("https://raw.githubusercontent.com/blawar/titledb/master/versions.json").send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let mut file = File::create(titledb_dir.join("versions.json")).await?;
+                let mut stream = resp.bytes_stream();
+                while let Some(item) = stream.next().await {
+                    file.write_all(&item?).await?;
+                }
+            }
+            Ok(resp) => warn!("Failed to sync versions.json: status {}", resp.status()),
+            Err(e) => warn!("Failed to sync versions.json: {}", e),
+        }
+
+        // Try region-specific first, then titles.json
+        let filename = format!("{}.{}.json", self.region, self.language);
+        let urls = vec![
+            format!("https://raw.githubusercontent.com/blawar/titledb/master/{}", filename),
+            "https://raw.githubusercontent.com/blawar/titledb/master/titles.json".to_string(),
+        ];
+
+        for url in urls {
+            info!("Syncing titles from {}...", url);
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let dest = if url.contains("titles.json") {
+                        titledb_dir.join(&filename) // save as region-specific anyway
+                    } else {
+                        titledb_dir.join(&filename)
+                    };
+                    let mut file = File::create(dest).await?;
+                    let mut stream = resp.bytes_stream();
+                    while let Some(item) = stream.next().await {
+                        file.write_all(&item?).await?;
+                    }
+                    info!("Successfully synced titles from {}", url);
+                    break;
+                }
+                Ok(resp) => warn!("Failed to sync from {}: status {}", url, resp.status()),
+                Err(e) => warn!("Failed to sync from {}: {}", url, e),
+            }
+        }
+
+        self.load_local_data().await;
+        Ok(())
+    }
+
+    pub fn get_title_info(&self, title_id: &str) -> Option<&TitleInfo> {
+        self.titles.get(&title_id.to_uppercase())
+    }
+
+    pub fn get_latest_version(&self, title_id: &str) -> Option<String> {
+        let versions = self.versions.get(&title_id.to_lowercase())?;
+        versions.keys().filter_map(|v| v.parse::<u64>().ok()).max().map(|v| v.to_string())
+    }
+}
+
+fn get_base_id(title_id: &str) -> Option<String> {
+    let id = u64::from_str_radix(title_id, 16).ok()?;
+    // ApplicationId = TitleId & 0xFFFFFFFFFFFFE000
+    let base_id = id & 0xFFFFFFFFFFFFE000;
+    let base_id_str = format!("{:016X}", base_id);
+
+    if base_id_str != title_id.to_uppercase() {
+        return Some(base_id_str);
     }
     None
 }
@@ -42,7 +180,7 @@ pub async fn download_image(title_id: &str, target_path: PathBuf) -> Option<Path
         for source in IMAGE_SOURCES {
             let url = source.replace("{id}", &id);
 
-            info!("Trying to fetch image from: {}", url);
+            debug!("Trying to fetch image from: {}", url);
 
             let resp = match client.get(&url).send().await {
                 Ok(r) => r,
@@ -70,7 +208,7 @@ pub async fn download_image(title_id: &str, target_path: PathBuf) -> Option<Path
                 "jpg"
             } else {
                 // Default fallback
-                "jpg"
+                "png"
             };
 
             let final_path = target_path.with_extension(ext);
@@ -99,7 +237,7 @@ pub async fn download_image(title_id: &str, target_path: PathBuf) -> Option<Path
                     return None;
                 }
             }
-            info!(
+            debug!(
                 "Downloaded image for {} (using ID: {}) to {:?}",
                 title_id, id, final_path
             );

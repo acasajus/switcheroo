@@ -12,6 +12,9 @@ pub struct Settings {
     pub webdav_username: Option<String>,
     pub webdav_password: Option<String>,
     pub webdav_enabled: bool,
+    pub metadata_region: String,
+    pub metadata_language: String,
+    pub tinfoil_encrypt: bool,
 }
 
 impl fmt::Debug for Settings {
@@ -22,6 +25,8 @@ impl fmt::Debug for Settings {
             .field("data_dir", &self.data_dir)
             .field("log_level", &self.log_level)
             .field("webdav_enabled", &self.webdav_enabled)
+            .field("metadata_region", &self.metadata_region)
+            .field("metadata_language", &self.metadata_language)
             .field(
                 "webdav_username",
                 &self.webdav_username.as_ref().map(|_| "***"),
@@ -45,6 +50,9 @@ impl Settings {
             .set_default("webdav_username", None::<String>)?
             .set_default("webdav_password", None::<String>)?
             .set_default("webdav_enabled", true)?
+            .set_default("metadata_region", "US")?
+            .set_default("metadata_language", "en")?
+            .set_default("tinfoil_encrypt", false)?
             // Config file (optional)
             .add_source(File::with_name("config").required(false))
             // Environment variables (e.g. SWITCHEROO_SERVER_PORT=8080)
