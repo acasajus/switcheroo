@@ -52,23 +52,14 @@ use rust_embed::RustEmbed;
 struct Assets;
 
 #[derive(Clone)]
-
-struct AppState {
-
-    games: Arc<Mutex<Vec<Game>>>,
-
-    settings: Settings,
-
-    host_url: String,
-
-    downloads: Downloads,
-
-    tx: broadcast::Sender<String>,
-
-    metadata: Arc<tokio::sync::Mutex<crate::metadata::MetadataProvider>>,
-
-    dav_handler: dav_server::DavHandler,
-
+pub struct AppState {
+    pub games: Arc<Mutex<Vec<Game>>>,
+    pub settings: Settings,
+    pub host_url: String,
+    pub downloads: Downloads,
+    pub tx: broadcast::Sender<String>,
+    pub metadata: Arc<tokio::sync::Mutex<crate::metadata::MetadataProvider>>,
+    pub dav_handler: dav_server::DavHandler,
 }
 
 
@@ -77,117 +68,179 @@ struct AppState {
 
     async fn static_handler(uri: axum::http::Uri) -> axum::response::Response {
 
+
+
     
 
         let path = uri.path().trim_start_matches('/');
 
+
+
     
 
     
+
+
 
     
 
         if path.is_empty() || path == "index.html" {
 
+
+
     
 
             return index_handler().await;
+
+
 
     
 
         }
 
+
+
     
 
     
+
+
 
     
 
         match Assets::get(path) {
 
+
+
     
 
             Some(content) => {
+
+
 
     
 
                 let mime = mime_guess::from_path(path).first_or_octet_stream();
 
+
+
     
 
                 ([(CONTENT_TYPE, mime.as_ref())], content.data).into_response()
 
+
+
     
 
             }
+
+
 
     
 
             None => {
 
+
+
     
 
                 // For SPA, redirect unknown paths to index.html
+
+
 
     
 
                 index_handler().await
 
+
+
     
 
             }
+
+
 
     
 
         }
 
+
+
     
 
     }
 
+
+
     
 
     
+
+
 
     
 
     async fn index_handler() -> axum::response::Response {
 
+
+
     
 
         match Assets::get("index.html") {
+
+
 
     
 
             Some(content) => ([(CONTENT_TYPE, "text/html")], content.data).into_response(),
 
+
+
     
 
             None => (
+
+
 
     
 
                 axum::http::StatusCode::NOT_FOUND,
 
+
+
     
 
                 "index.html not found in embedded assets",
+
+
 
     
 
             )
 
+
+
     
 
                 .into_response(),
+
+
 
     
 
         }
 
+
+
     
 
     }
+
+
+
+    
+
+    
 
     
 
@@ -1532,11 +1585,22 @@ struct AppState {
         
 
     // --- Router Setup ---
+    let app = create_app(state);
 
+    let port = settings.server_port;
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    info!("Listening on http://{}", addr);
+    info!("Network address: {}", host_url);
+
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+pub fn create_app(state: AppState) -> Router {
     let mut app = Router::new();
 
     // 1. WebDAV Routes (No global layers)
-    if settings.webdav_enabled {
+    if state.settings.webdav_enabled {
         app = app
             .route("/dav", any(webdav_wrapper))
             .route("/dav/", any(webdav_wrapper))
@@ -1557,7 +1621,10 @@ struct AppState {
         .route("/dbi/{*path}", get(download_file))
         .route("/events", get(sse_handler))
         .route("/files/{*path}", get(download_file))
-        .nest_service("/images", ServeDir::new(settings.data_dir.join("images")))
+        .nest_service(
+            "/images",
+            ServeDir::new(state.settings.data_dir.join("images")),
+        )
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
@@ -1565,19 +1632,9 @@ struct AppState {
         )
         .layer(CorsLayer::permissive());
 
-    let app = app
-        .merge(main_routes)
+    app.merge(main_routes)
         .with_state(state)
-        .fallback(static_handler);
-            
-
-    let port = settings.server_port;
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Listening on http://{}", addr);
-    info!("Network address: {}", host_url);
-
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+        .fallback(static_handler)
 }
 
 async fn server_info(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -1827,4 +1884,203 @@ async fn dbi_index(State(state): State<AppState>) -> axum::response::Html<String
     html.push_str("</ul></body></html>");
 
     axum::response::Html(html)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum_test::TestServer;
+    use tempfile::tempdir;
+    use base64::Engine;
+
+    async fn setup_test_app() -> (TestServer, AppState, tempfile::TempDir) {
+        let tmp_dir = tempdir().unwrap();
+        let games_dir = tmp_dir.path().join("games");
+        let data_dir = tmp_dir.path().join("data");
+        std::fs::create_dir_all(&games_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        // Create a dummy game file
+        std::fs::write(games_dir.join("Test Game [0100000000010000][v0].nsp"), "dummy").unwrap();
+
+        let settings = Settings {
+            server_port: 0,
+            games_dir: games_dir.clone(),
+            data_dir: data_dir.clone(),
+            log_level: "info".to_string(),
+            webdav_username: None,
+            webdav_password: None,
+            webdav_enabled: true,
+            metadata_region: "US".to_string(),
+            metadata_language: "en".to_string(),
+            tinfoil_encrypt: false,
+        };
+
+        let games = Arc::new(Mutex::new(vec![Game {
+            name: "Test Game".to_string(),
+            path: games_dir.join("Test Game [0100000000010000][v0].nsp"),
+            relative_path: "Test Game [0100000000010000][v0].nsp".to_string(),
+            size: 5,
+            format: "nsp".to_string(),
+            title_id: Some("0100000000010000".to_string()),
+            version: Some("v0".to_string()),
+            latest_version: None,
+            category: "Base".to_string(),
+            publisher: None,
+            image_url: None,
+        }]));
+
+        let (tx, _) = broadcast::channel(10);
+        let metadata = Arc::new(tokio::sync::Mutex::new(
+            crate::metadata::MetadataProvider::new(data_dir, "US".to_string(), "en".to_string())
+                .await,
+        ));
+        let dav_handler = webdav::create_dav_handler(&settings);
+
+        let state = AppState {
+            games,
+            settings,
+            host_url: "http://localhost".to_string(),
+            downloads: Arc::new(Mutex::new(HashMap::new())),
+            tx,
+            metadata,
+            dav_handler,
+        };
+
+        let app = create_app(state.clone());
+        (TestServer::new(app).unwrap(), state, tmp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_list_games() {
+        let (server, _, _tmp) = setup_test_app().await;
+        let response = server.get("/api/games").await;
+        response.assert_status_ok();
+        let games: Vec<Game> = response.json();
+        assert_eq!(games.len(), 1);
+        assert_eq!(games[0].name, "Test Game");
+    }
+
+    #[tokio::test]
+    async fn test_tinfoil_index() {
+        let (server, _, _tmp) = setup_test_app().await;
+        let response = server.get("/tinfoil").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert!(body.get("files").is_some());
+        assert!(body.get("success").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_dbi_index() {
+        let (server, _, _tmp) = setup_test_app().await;
+        let response = server.get("/dbi").await;
+        response.assert_status_ok();
+        let body = response.text();
+        assert!(body.contains("DBI Index"));
+        assert!(body.contains("Test Game"));
+    }
+
+    #[tokio::test]
+    async fn test_webdav_options() {
+        let (server, _, _tmp) = setup_test_app().await;
+        
+        // With trailing slash
+        let response = server.method(axum::http::Method::OPTIONS, "/dav/").await;
+        response.assert_status_ok();
+        response.assert_header("DAV", "1, 2");
+        response.assert_header("MS-Author-Via", "DAV");
+
+        // Without trailing slash
+        let response = server.method(axum::http::Method::OPTIONS, "/dav").await;
+        response.assert_status_ok();
+        response.assert_header("DAV", "1, 2");
+        response.assert_header("MS-Author-Via", "DAV");
+    }
+
+    #[tokio::test]
+    async fn test_webdav_auth() {
+        let tmp_dir = tempdir().unwrap();
+        let games_dir = tmp_dir.path().join("games");
+        let data_dir = tmp_dir.path().join("data");
+        std::fs::create_dir_all(&games_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let settings = Settings {
+            server_port: 0,
+            games_dir: games_dir.clone(),
+            data_dir: data_dir.clone(),
+            log_level: "info".to_string(),
+            webdav_username: Some("admin".to_string()),
+            webdav_password: Some("password".to_string()),
+            webdav_enabled: true,
+            metadata_region: "US".to_string(),
+            metadata_language: "en".to_string(),
+            tinfoil_encrypt: false,
+        };
+
+        let games = Arc::new(Mutex::new(vec![]));
+        let (tx, _) = broadcast::channel(10);
+        let metadata = Arc::new(tokio::sync::Mutex::new(
+            crate::metadata::MetadataProvider::new(data_dir, "US".to_string(), "en".to_string())
+                .await,
+        ));
+        let dav_handler = webdav::create_dav_handler(&settings);
+
+        let state = AppState {
+            games,
+            settings,
+            host_url: "http://localhost".to_string(),
+            downloads: Arc::new(Mutex::new(HashMap::new())),
+            tx,
+            metadata,
+            dav_handler,
+        };
+
+        let app = create_app(state);
+        let server = TestServer::new(app).unwrap();
+
+        // 1. Unauthenticated request should fail
+        let response = server.get("/dav/").await;
+        response.assert_status(axum::http::StatusCode::UNAUTHORIZED);
+        response.assert_header("WWW-Authenticate", "Basic realm=\"Switcheroo WebDAV\"");
+
+        // 2. Authenticated request should succeed (or at least not be UNAUTHORIZED)
+        let auth = base64::engine::general_purpose::STANDARD.encode("admin:password");
+        let response = server
+            .get("/dav/")
+            .add_header(
+                axum::http::header::AUTHORIZATION,
+                axum::http::HeaderValue::from_str(&format!("Basic {}", auth)).unwrap(),
+            )
+            .await;
+        
+        // Since it's an empty directory, it might return 200 or 207 depending on the method
+        // But it should NOT be 401
+        assert_ne!(response.status_code(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_spa_fallback() {
+        let (server, _, _tmp) = setup_test_app().await;
+        
+        // Request a random path that doesn't exist
+        let response = server.get("/some/random/page").await;
+        
+        // Should return 200 OK (from index.html)
+        response.assert_status_ok();
+        response.assert_header("content-type", "text/html");
+        
+        let body = response.text();
+        assert!(body.contains("<div id=\"app\"")); // Basic check for our index.html
+    }
+
+    #[tokio::test]
+    async fn test_manual_sync_trigger() {
+        let (server, _, _tmp) = setup_test_app().await;
+        let response = server.get("/api/sync").await;
+        response.assert_status_ok();
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("status").and_then(|v| v.as_str()), Some("started"));
+    }
 }

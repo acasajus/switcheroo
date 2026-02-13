@@ -145,3 +145,47 @@ pub fn process_entry(
         image_url: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_parse_filename() {
+        let cases = vec![
+            (
+                "Super Mario Odyssey [0100000000010000][v0].nsp",
+                "Super Mario Odyssey", Some("0100000000010000"), Some("v0"), "Base"
+            ),
+            (
+                "Mario Kart 8 Deluxe [0100152000022000][v524288].nsz",
+                "Mario Kart 8 Deluxe", Some("0100152000022000"), Some("v524288"), "Update"
+            ),
+            (
+                "Breath of the Wild [01007EF00011E000][DLC].xci",
+                "Breath of the Wild", Some("01007EF00011E000"), None, "DLC"
+            ),
+        ];
+
+        for (filename, expected_name, expected_id, expected_ver, expected_cat) in cases {
+            let (name, id, ver, cat) = parse_filename(filename);
+            assert_eq!(name, expected_name);
+            assert_eq!(id, expected_id.map(|s| s.to_string()));
+            assert_eq!(ver, expected_ver.map(|s| s.to_string()));
+            assert_eq!(cat, expected_cat);
+        }
+    }
+
+    #[test]
+    fn test_process_entry() {
+        let tmp = tempdir().unwrap();
+        let game_path = tmp.path().join("Test [0100000000010000][v0].nsp");
+        std::fs::write(&game_path, "dummy").unwrap();
+
+        let game = process_entry(&game_path, tmp.path(), tmp.path(), None).unwrap();
+        assert_eq!(game.name, "Test");
+        assert_eq!(game.title_id, Some("0100000000010000".to_string()));
+        assert_eq!(game.format, "nsp");
+    }
+}

@@ -55,5 +55,38 @@ pub fn encrypt_shop(json_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Err
     output.write_all(&(compressed_size as u64).to_le_bytes())?;
     output.write_all(&encrypted_data)?;
 
-    Ok(output)
-}
+        Ok(output)
+
+    }
+
+    
+
+    #[cfg(test)]
+
+    mod tests {
+
+        use super::*;
+
+    
+
+        #[test]
+
+        fn test_encrypt_shop() {
+
+            let data = b"{\"files\": []}";
+
+            let result = encrypt_shop(data);
+
+            assert!(result.is_ok());
+
+            let encrypted = result.unwrap();
+
+            assert!(encrypted.starts_with(b"TINFOIL"));
+
+            assert!(encrypted.len() > 7 + 1 + 256 + 8); // Header + flag + RSA + size
+
+        }
+
+    }
+
+    
