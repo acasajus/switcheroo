@@ -1,6 +1,6 @@
-use axum::extract::State;
-use crate::state::AppState;
 use crate::handlers::files::encode_path;
+use crate::state::AppState;
+use axum::extract::State;
 
 pub async fn dbi_index(State(state): State<AppState>) -> axum::response::Html<String> {
     let games = state.games.lock().unwrap();

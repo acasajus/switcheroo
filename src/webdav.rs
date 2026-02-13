@@ -24,10 +24,7 @@ pub async fn webdav_handler(
     tracing::info!("WebDAV Request: {} {}", req.method(), req.uri());
 
     // Check authentication if configured
-    let (username, password) = match (
-        &settings.webdav_username,
-        &settings.webdav_password,
-    ) {
+    let (username, password) = match (&settings.webdav_username, &settings.webdav_password) {
         (Some(u), Some(p)) => (u, p),
         _ => return dav_handler.handle(req).await.into_response(),
     };

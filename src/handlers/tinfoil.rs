@@ -1,19 +1,16 @@
+use crate::handlers::files::encode_path;
+use crate::state::AppState;
+use crate::tinfoil;
 use axum::{
     Json,
     body::Body,
     extract::State,
-    http::{header::{CONTENT_TYPE, HeaderMap}},
+    http::header::{CONTENT_TYPE, HeaderMap},
     response::IntoResponse,
 };
 use tracing::error;
-use crate::state::AppState;
-use crate::handlers::files::encode_path;
-use crate::tinfoil;
 
-pub async fn tinfoil_index(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+pub async fn tinfoil_index(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let games = state.games.lock().unwrap();
 
     // Determine host from header or fallback to internal config

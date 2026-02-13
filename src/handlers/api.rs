@@ -1,13 +1,13 @@
+use crate::scanner::process_entry;
+use crate::state::AppState;
 use axum::{
     Json,
     extract::State,
     response::sse::{Event, Sse},
 };
 use futures::stream::{Stream, StreamExt};
-use tracing::{info, error};
+use tracing::{error, info};
 use walkdir::WalkDir;
-use crate::state::AppState;
-use crate::scanner::process_entry;
 
 pub async fn server_info(State(state): State<AppState>) -> Json<serde_json::Value> {
     let ips = local_ip_address::list_afinet_netifas()
@@ -57,7 +57,9 @@ pub async fn sync_metadata(State(state): State<AppState>) -> Json<serde_json::Va
         let meta_provider = metadata.lock().await;
         let mut new_games = Vec::new();
         for entry in WalkDir::new(&games_dir).into_iter().filter_map(|e| e.ok()) {
-            if let Some(game) = process_entry(entry.path(), &games_dir, &data_dir, Some(&meta_provider)) {
+            if let Some(game) =
+                process_entry(entry.path(), &games_dir, &data_dir, Some(&meta_provider))
+            {
                 new_games.push(game);
             }
         }

@@ -156,15 +156,24 @@ mod tests {
         let cases = vec![
             (
                 "Super Mario Odyssey [0100000000010000][v0].nsp",
-                "Super Mario Odyssey", Some("0100000000010000"), Some("v0"), "Base"
+                "Super Mario Odyssey",
+                Some("0100000000010000"),
+                Some("v0"),
+                "Base",
             ),
             (
                 "Mario Kart 8 Deluxe [0100152000022000][v524288].nsz",
-                "Mario Kart 8 Deluxe", Some("0100152000022000"), Some("v524288"), "Update"
+                "Mario Kart 8 Deluxe",
+                Some("0100152000022000"),
+                Some("v524288"),
+                "Update",
             ),
             (
                 "Breath of the Wild [01007EF00011E000][DLC].xci",
-                "Breath of the Wild", Some("01007EF00011E000"), None, "DLC"
+                "Breath of the Wild",
+                Some("01007EF00011E000"),
+                None,
+                "DLC",
             ),
         ];
 

@@ -47,26 +47,51 @@ impl MetadataProvider {
             .join(format!("{}.{}.json", self.region, self.language));
         if titles_path.exists() {
             info!("Loading local titles database from {:?}", titles_path);
-            let content = tokio::fs::read_to_string(&titles_path).await.unwrap_or_default();
+            let content = tokio::fs::read_to_string(&titles_path)
+                .await
+                .unwrap_or_default();
             if !content.is_empty() {
                 let titles = tokio::task::spawn_blocking(move || {
                     let mut map = HashMap::new();
-                    if let Ok(data) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&content) {
+                    if let Ok(data) =
+                        serde_json::from_str::<HashMap<String, serde_json::Value>>(&content)
+                    {
                         for (id, val) in data {
                             let info = TitleInfo {
                                 id: id.clone(),
-                                name: val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                icon_url: val.get("iconUrl").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                banner_url: val.get("bannerUrl").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                category: val.get("category").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()),
-                                description: val.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                                publisher: val.get("publisher").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                name: val
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
+                                icon_url: val
+                                    .get("iconUrl")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
+                                banner_url: val
+                                    .get("bannerUrl")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
+                                category: val.get("category").and_then(|v| v.as_array()).map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect()
+                                }),
+                                description: val
+                                    .get("description")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
+                                publisher: val
+                                    .get("publisher")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string()),
                             };
                             map.insert(id.to_uppercase(), info);
                         }
                     }
                     map
-                }).await.unwrap_or_default();
+                })
+                .await
+                .unwrap_or_default();
                 self.titles = titles;
             }
         }
@@ -94,7 +119,11 @@ impl MetadataProvider {
 
         // Sync versions.json
         info!("Syncing versions.json...");
-        match client.get("https://raw.githubusercontent.com/blawar/titledb/master/versions.json").send().await {
+        match client
+            .get("https://raw.githubusercontent.com/blawar/titledb/master/versions.json")
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 let mut file = File::create(titledb_dir.join("versions.json")).await?;
                 let mut stream = resp.bytes_stream();
@@ -109,7 +138,10 @@ impl MetadataProvider {
         // Try region-specific first, then titles.json
         let filename = format!("{}.{}.json", self.region, self.language);
         let urls = vec![
-            format!("https://raw.githubusercontent.com/blawar/titledb/master/{}", filename),
+            format!(
+                "https://raw.githubusercontent.com/blawar/titledb/master/{}",
+                filename
+            ),
             "https://raw.githubusercontent.com/blawar/titledb/master/titles.json".to_string(),
         ];
 
@@ -141,6 +173,10 @@ impl MetadataProvider {
 
     pub fn get_latest_version(&self, title_id: &str) -> Option<String> {
         let versions = self.versions.get(&title_id.to_lowercase())?;
-        versions.keys().filter_map(|v| v.parse::<u64>().ok()).max().map(|v| v.to_string())
+        versions
+            .keys()
+            .filter_map(|v| v.parse::<u64>().ok())
+            .max()
+            .map(|v| v.to_string())
     }
 }

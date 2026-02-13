@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex};
-use tokio::sync::broadcast;
 use crate::config::Settings;
-use crate::scanner::Game;
 use crate::downloads::Downloads;
 use crate::metadata::MetadataProvider;
+use crate::scanner::Game;
 use dav_server::DavHandler;
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct AppState {

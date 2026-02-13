@@ -1,3 +1,5 @@
+use crate::downloads::DownloadState;
+use crate::state::AppState;
 use axum::{
     body::{Body, Bytes},
     extract::{Path, State},
@@ -14,8 +16,6 @@ use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use tracing::{error, info};
 use uuid::Uuid;
-use crate::state::AppState;
-use crate::downloads::DownloadState;
 
 pub async fn download_file(
     Path(path): Path<String>,

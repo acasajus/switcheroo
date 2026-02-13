@@ -1,7 +1,4 @@
-use axum::{
-    http::header::CONTENT_TYPE,
-    response::IntoResponse,
-};
+use axum::{http::header::CONTENT_TYPE, response::IntoResponse};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]

@@ -1,6 +1,6 @@
-use std::process::Command;
 use std::env;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
@@ -16,7 +16,7 @@ fn main() {
     println!("cargo:rerun-if-changed=frontend/tailwind.config.js");
 
     let frontend_dir = Path::new("frontend");
-    
+
     // Check if node_modules exists, if not run npm install
     if !frontend_dir.join("node_modules").exists() {
         let status = Command::new("npm")
@@ -24,7 +24,7 @@ fn main() {
             .current_dir(frontend_dir)
             .status()
             .expect("Failed to run npm install");
-        
+
         if !status.success() {
             panic!("npm install failed");
         }

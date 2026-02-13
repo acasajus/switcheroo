@@ -17,16 +17,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
-use tower_http::{
-    cors::CorsLayer,
-    services::ServeDir,
-    trace::TraceLayer,
-};
+use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 use tracing::{Level, info};
 
 use crate::config::Settings;
-use crate::state::AppState;
 use crate::handlers::{api, dbi, files, tinfoil as tinfoil_h, web};
+use crate::state::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -43,7 +39,8 @@ async fn main() {
         std::fs::create_dir_all(&settings.games_dir).expect("Failed to create games directory");
     }
     if !settings.data_dir.join("images").exists() {
-        std::fs::create_dir_all(settings.data_dir.join("images")).expect("Failed to create images directory");
+        std::fs::create_dir_all(settings.data_dir.join("images"))
+            .expect("Failed to create images directory");
     }
 
     let games = Arc::new(Mutex::new(Vec::new()));
@@ -52,11 +49,14 @@ async fn main() {
     let downloads = Arc::new(Mutex::new(HashMap::new()));
     let (tx, _) = broadcast::channel(100);
 
-    let metadata = Arc::new(tokio::sync::Mutex::new(crate::metadata::MetadataProvider::new(
-        settings.data_dir.clone(),
-        settings.metadata_region.clone(),
-        settings.metadata_language.clone(),
-    ).await));
+    let metadata = Arc::new(tokio::sync::Mutex::new(
+        crate::metadata::MetadataProvider::new(
+            settings.data_dir.clone(),
+            settings.metadata_region.clone(),
+            settings.metadata_language.clone(),
+        )
+        .await,
+    ));
 
     let dav_handler = webdav::create_dav_handler(&settings);
 
@@ -127,20 +127,19 @@ pub fn create_app(state: AppState) -> Router {
             .route("/dav/{*path}", any(webdav_wrapper));
     }
 
-    app.with_state(state)
-        .fallback(web::static_handler)
+    app.with_state(state).fallback(web::static_handler)
 }
 
 async fn webdav_wrapper(
     axum::extract::State(state): axum::extract::State<AppState>,
     req: axum::extract::Request,
 ) -> impl axum::response::IntoResponse {
-    use axum::response::IntoResponse;
     use axum::http::header::HeaderValue;
+    use axum::response::IntoResponse;
 
     let method = req.method().clone();
     let uri = req.uri().clone();
-    
+
     let mut response =
         webdav::webdav_handler(state.settings.clone(), state.dav_handler.clone(), req)
             .await
@@ -151,9 +150,19 @@ async fn webdav_wrapper(
     headers.insert("MS-Author-Via", HeaderValue::from_static("DAV"));
 
     if !response.status().is_success() {
-        tracing::debug!("WebDAV Response Error: {} {} -> {}", method, uri, response.status());
+        tracing::debug!(
+            "WebDAV Response Error: {} {} -> {}",
+            method,
+            uri,
+            response.status()
+        );
     } else {
-        info!("WebDAV Request: {} {} -> {}", method, uri, response.status());
+        info!(
+            "WebDAV Request: {} {} -> {}",
+            method,
+            uri,
+            response.status()
+        );
     }
 
     response
@@ -162,10 +171,10 @@ async fn webdav_wrapper(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum_test::TestServer;
-    use tempfile::tempdir;
-    use base64::Engine;
     use crate::scanner::Game;
+    use axum_test::TestServer;
+    use base64::Engine;
+    use tempfile::tempdir;
 
     async fn setup_test_app() -> (TestServer, AppState, tempfile::TempDir) {
         let tmp_dir = tempdir().unwrap();
@@ -174,7 +183,11 @@ mod tests {
         std::fs::create_dir_all(&games_dir).unwrap();
         std::fs::create_dir_all(&data_dir).unwrap();
 
-        std::fs::write(games_dir.join("Test Game [0100000000010000][v0].nsp"), "dummy").unwrap();
+        std::fs::write(
+            games_dir.join("Test Game [0100000000010000][v0].nsp"),
+            "dummy",
+        )
+        .unwrap();
 
         let settings = Settings {
             server_port: 0,
@@ -322,7 +335,7 @@ mod tests {
                 axum::http::HeaderValue::from_str(&format!("Basic {}", auth)).unwrap(),
             )
             .await;
-        
+
         assert_ne!(response.status_code(), axum::http::StatusCode::UNAUTHORIZED);
     }
 
