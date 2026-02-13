@@ -12,12 +12,10 @@ interface Game {
   latest_version?: string;
   category: string; // "Base", "Update", "DLC"
   publisher?: string;
-  image_url?: string;
 }
 
 interface GroupedGame {
     title: string;
-    image_url?: string;
     files: Game[];
     totalSize: number;
 }
@@ -95,14 +93,9 @@ function groupGames(games: Game[]): GroupedGame[] {
         if (!groups[game.name]) {
             groups[game.name] = {
                 title: game.name,
-                image_url: game.image_url, // Take the first found image
                 files: [],
                 totalSize: 0
             };
-        }
-        // If the group doesn't have an image but this file does, use it
-        if (!groups[game.name].image_url && game.image_url) {
-             groups[game.name].image_url = game.image_url;
         }
         
         groups[game.name].files.push(game);
@@ -320,22 +313,11 @@ const GameList = () => {
                 return `
                 <div class="group bg-slate-900 rounded-xl border border-slate-800 hover:border-indigo-500/30 transition-all hover:shadow-xl hover:shadow-indigo-500/10 overflow-hidden flex flex-col">
                     
-                    <!-- Cover Image Area -->
-                    <div class="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800">
-                        ${group.image_url ? `
-                            <img src="/files/${encodeURIComponent(group.image_url)}" alt="${group.title}" class="w-full h-full object-cover transition-transform group-hover:scale-105 duration-500">
-                            <div class="absolute inset-0 bg-gradient-to-t from-slate-900 to-transparent opacity-60"></div>
-                        ` : `
-                            <div class="text-slate-800">${Icons.ImageOff}</div>
-                            <div class="absolute inset-0 bg-gradient-to-tr from-slate-900 via-transparent to-slate-800/50"></div>
-                        `}
-                        
-                        <div class="absolute bottom-0 left-0 p-4 w-full">
-                            <h3 class="font-bold text-lg text-white leading-tight line-clamp-2 drop-shadow-md">${group.title}</h3>
-                            <div class="flex items-center justify-between mt-1">
-                                <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold truncate pr-2">${publisher || 'Unknown Publisher'}</div>
-                                <div class="text-[10px] text-slate-500 font-mono">${group.files.length} files • ${formatBytes(group.totalSize)}</div>
-                            </div>
+                    <div class="p-4 border-b border-slate-800 bg-slate-950/50">
+                        <h3 class="font-bold text-lg text-white leading-tight line-clamp-2">${group.title}</h3>
+                        <div class="flex items-center justify-between mt-1">
+                            <div class="text-[10px] text-slate-400 uppercase tracking-wider font-semibold truncate pr-2">${publisher || 'Unknown Publisher'}</div>
+                            <div class="text-[10px] text-slate-500 font-mono">${group.files.length} files • ${formatBytes(group.totalSize)}</div>
                         </div>
                     </div>
 

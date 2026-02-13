@@ -4,13 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, info, warn};
-
-const IMAGE_SOURCES: &[&str] = &[
-    "https://api.nlib.cc/nx/{id}/icon",
-    "https://raw.githubusercontent.com/BigOnYa/titledb/main/icons/{id}.png",
-    "https://raw.githubusercontent.com/CensoredTheInvisable/titledb/main/icons/{id}.png",
-];
+use tracing::{info, warn};
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct TitleInfo {
@@ -123,11 +117,7 @@ impl MetadataProvider {
             info!("Syncing titles from {}...", url);
             match client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    let dest = if url.contains("titles.json") {
-                        titledb_dir.join(&filename) // save as region-specific anyway
-                    } else {
-                        titledb_dir.join(&filename)
-                    };
+                    let dest = titledb_dir.join(&filename);
                     let mut file = File::create(dest).await?;
                     let mut stream = resp.bytes_stream();
                     while let Some(item) = stream.next().await {
@@ -153,98 +143,4 @@ impl MetadataProvider {
         let versions = self.versions.get(&title_id.to_lowercase())?;
         versions.keys().filter_map(|v| v.parse::<u64>().ok()).max().map(|v| v.to_string())
     }
-}
-
-fn get_base_id(title_id: &str) -> Option<String> {
-    let id = u64::from_str_radix(title_id, 16).ok()?;
-    // ApplicationId = TitleId & 0xFFFFFFFFFFFFE000
-    let base_id = id & 0xFFFFFFFFFFFFE000;
-    let base_id_str = format!("{:016X}", base_id);
-
-    if base_id_str != title_id.to_uppercase() {
-        return Some(base_id_str);
-    }
-    None
-}
-
-pub async fn download_image(title_id: &str, target_path: PathBuf) -> Option<PathBuf> {
-    let client = reqwest::Client::new();
-
-    // IDs to try: the provided one, and potentially the base one if it looks like an update/DLC
-    let mut ids_to_try = vec![title_id.to_string()];
-    if let Some(base) = get_base_id(title_id) {
-        ids_to_try.push(base);
-    }
-
-    for id in ids_to_try {
-        for source in IMAGE_SOURCES {
-            let url = source.replace("{id}", &id);
-
-            debug!("Trying to fetch image from: {}", url);
-
-            let resp = match client.get(&url).send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!("Request failed for {}: {}", url, e);
-                    continue;
-                }
-            };
-
-            if !resp.status().is_success() {
-                debug!("Source {} returned status {}", url, resp.status());
-                continue;
-            }
-
-            let content_type = resp
-                .headers()
-                .get("content-type")
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("");
-
-            // Determine extension from content-type or url
-            let ext = if content_type.contains("png") {
-                "png"
-            } else if content_type.contains("jpeg") || content_type.contains("jpg") {
-                "jpg"
-            } else {
-                // Default fallback
-                "png"
-            };
-
-            let final_path = target_path.with_extension(ext);
-
-            // Write to file
-            let mut file = match File::create(&final_path).await {
-                Ok(f) => f,
-                Err(e) => {
-                    error!("Failed to create image file: {}", e);
-                    continue;
-                }
-            };
-
-            let mut stream = resp.bytes_stream();
-            while let Some(item) = stream.next().await {
-                let chunk = match item {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to read image stream: {}", e);
-                        return None;
-                    }
-                };
-
-                if let Err(e) = file.write_all(&chunk).await {
-                    error!("Failed to write image data: {}", e);
-                    return None;
-                }
-            }
-            debug!(
-                "Downloaded image for {} (using ID: {}) to {:?}",
-                title_id, id, final_path
-            );
-            return Some(final_path);
-        }
-    }
-
-    warn!("Could not find image for {}", title_id);
-    None
 }

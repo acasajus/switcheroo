@@ -641,11 +641,11 @@ struct AppState {
 
 
 
-        let (tx, _rx) = broadcast::channel(100);
+            let (tx, _rx) = broadcast::channel(100);
 
 
 
-    
+        
 
 
 
@@ -653,15 +653,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 settings.data_dir.clone(),
-
-
-
-    
 
 
 
@@ -669,15 +661,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 settings.metadata_language.clone(),
-
-
-
-    
 
 
 
@@ -685,15 +669,7 @@ struct AppState {
 
 
 
-    
-
-
-
         
-
-
-
-    
 
 
 
@@ -701,15 +677,7 @@ struct AppState {
 
 
 
-    
-
-
-
             let metadata_init = metadata.clone();
-
-
-
-    
 
 
 
@@ -717,15 +685,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 let mut meta = metadata_init.lock().await;
-
-
-
-    
 
 
 
@@ -733,15 +693,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 info!("Metadata initialized and ready.");
-
-
-
-    
 
 
 
@@ -749,15 +701,7 @@ struct AppState {
 
 
 
-    
-
-
-
         
-
-
-
-    
 
 
 
@@ -765,23 +709,7 @@ struct AppState {
 
 
 
-    
-
-
-
         
-
-
-
-    
-
-
-
-        
-
-
-
-    
 
 
 
@@ -789,15 +717,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 games: games.clone(),
-
-
-
-    
 
 
 
@@ -805,15 +725,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 host_url: host_url.clone(),
-
-
-
-    
 
 
 
@@ -821,15 +733,7 @@ struct AppState {
 
 
 
-    
-
-
-
                 tx: tx.clone(),
-
-
-
-    
 
 
 
@@ -837,23 +741,11 @@ struct AppState {
 
 
 
-    
-
-
-
                 dav_handler,
 
 
 
-    
-
-
-
             };
-
-
-
-    
 
 
 
@@ -861,211 +753,187 @@ struct AppState {
 
 
 
-    // Metadata Sync Task
+            // Metadata Sync Task
 
-    let metadata_clone = metadata.clone();
 
-    let tx_sync = tx.clone();
 
-    tokio::spawn(async move {
+            let metadata_clone = metadata.clone();
 
-        let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600)); // Every 24h
+
+
+            let tx_sync = tx.clone();
+
+
+
+            tokio::spawn(async move {
+
+
+
+                let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600)); // Every 24h
+
+
 
                 loop {
 
+
+
                     interval.tick().await;
+
+
 
                     info!("Starting periodic metadata sync...");
 
+
+
                     let mut meta = metadata_clone.lock().await;
+
+
 
                     if let Err(e) = meta.sync().await {
 
+
+
                         error!("Failed to sync metadata: {}", e);
+
+
 
                     } else {
 
+
+
+                        info!("Metadata sync complete.");
+
+
+
+                        let _ = tx_sync.send(
+
+
+
+                            serde_json::json!({
+
+
+
+                                "type": "sync",
+
+
+
+                                "status": "complete"
+
+
+
+                            })
+
+
+
+                            .to_string(),
+
+
+
+                        );
+
+
+
+                    }
+
+
+
+                    drop(meta);
+
+
+
+                }
+
+
+
+            });
+
+
+
         
 
-                info!("Metadata sync complete.");
 
-                let _ = tx_sync.send(
+
+            // Background Game Scanning Task
+
+
+
+            let games_dir = settings.games_dir.clone();
+
+
+
+            let data_dir_scan = settings.data_dir.clone();
+
+
+
+            let games_clone = games.clone();
+
+
+
+            let tx_scan = tx.clone();
+
+
+
+            let metadata_scan = metadata.clone();
+
+
+
+        
+
+
+
+            tokio::task::spawn_blocking(move || {
+
+
+
+                info!("Starting background game scan in: {:?}", games_dir);
+
+
+
+                let start_time = std::time::Instant::now();
+
+
+
+        
+
+
+
+                // Notify start
+
+
+
+                let _ = tx_scan.send(
+
+
 
                     serde_json::json!({
 
-                        "type": "sync",
 
-                        "status": "complete"
+
+                        "type": "scan",
+
+
+
+                        "status": "scanning",
+
+
+
+                        "count": 0
+
+
 
                     })
 
+
+
                     .to_string(),
+
+
 
                 );
 
-            }
 
-            drop(meta);
 
-        }
-
-    });
-
-
-
-    // Image Download Channel
-
-    let (img_tx, mut img_rx) = tokio::sync::mpsc::channel::<(String, std::path::PathBuf)>(100);
-
-
-
-    // Image Downloader Task
-
-    let games_img = games.clone();
-
-    let data_dir_img = settings.data_dir.clone();
-
-    let tx_img = tx.clone();
-
-
-
-    tokio::spawn(async move {
-
-        while let Some((title_id, game_path)) = img_rx.recv().await {
-
-            // Determine target image path in data_dir/images
-
-            let target_path = data_dir_img
-
-                .join("images")
-
-                .join(format!("{}.jpg", title_id));
-
-
-
-            // Check if already exists (should happen in process_entry, but good double check)
-
-            if target_path.exists() {
-
-                continue;
-
-            }
-
-
-
-            // Wait a bit to avoid rate limits if many
-
-            // tokio::time::sleep(Duration::from_millis(500)).await;
-
-
-
-            let saved_path = match metadata::download_image(&title_id, target_path).await {
-
-                Some(p) => p,
-
-                None => continue,
-
-            };
-
-
-
-            // Update state
-
-            let mut games = games_img.lock().unwrap();
-
-            let game = match games.iter_mut().find(|g| g.path == game_path) {
-
-                Some(g) => g,
-
-                None => continue,
-
-            };
-
-
-
-            // Determine extension from saved path
-
-            let ext = saved_path
-
-                .extension()
-
-                .and_then(|s| s.to_str())
-
-                .unwrap_or("png");
-
-            let rel_url = format!("/images/{}.{}", title_id, ext);
-
-
-
-            game.image_url = Some(rel_url);
-
-
-
-            // Notify frontend to refresh games list
-
-            let _ = tx_img.send(
-
-                serde_json::json!({
-
-                    "type": "scan",
-
-                    "status": "image_updated",
-
-                    "count": 0 // Dummy
-
-                })
-
-                .to_string(),
-
-            );
-
-        }
-
-    });
-
-
-
-    // Background Game Scanning Task
-
-    let games_dir = settings.games_dir.clone();
-
-    let data_dir_scan = settings.data_dir.clone();
-
-    let games_clone = games.clone();
-
-    let tx_scan = tx.clone();
-
-    let img_tx_scan = img_tx.clone();
-
-    let metadata_scan = metadata.clone();
-
-
-
-    tokio::task::spawn_blocking(move || {
-
-        info!("Starting background game scan in: {:?}", games_dir);
-
-        let start_time = std::time::Instant::now();
-
-
-
-        // Notify start
-
-        let _ = tx_scan.send(
-
-            serde_json::json!({
-
-                "type": "scan",
-
-                "status": "scanning",
-
-                "count": 0
-
-            })
-
-            .to_string(),
-
-        );
+        
 
 
 
@@ -1101,107 +969,187 @@ struct AppState {
 
 
 
+                        Some(g) => g,
+
+
+
+                        None => continue,
+
+
+
+                    };
+
+
+
         
 
-                Some(g) => g,
 
-                None => continue,
 
-            };
+                    batch.push(game);
 
 
 
-            // Queue image download if needed
-
-            if game.image_url.is_none() && let Some(ref tid) = game.title_id {
-
-                let _ = img_tx_scan.blocking_send((tid.clone(), game.path.clone()));
-
-            }
+                    total_count += 1;
 
 
 
-            batch.push(game);
-
-            total_count += 1;
+        
 
 
 
-            // Update batch every 50 items to keep UI responsive but performant
+                    // Update batch every 50 items to keep UI responsive but performant
 
-            if batch.len() >= 50 {
 
-                let mut g_lock = games_clone.lock().unwrap();
 
-                g_lock.extend(batch.drain(..));
+                    if batch.len() >= 50 {
 
-                drop(g_lock); // Release lock immediately
+
+
+                        let mut g_lock = games_clone.lock().unwrap();
+
+
+
+                        g_lock.extend(batch.drain(..));
+
+
+
+                        drop(g_lock); // Release lock immediately
+
+
+
+        
+
+
+
+                        let _ = tx_scan.send(
+
+
+
+                            serde_json::json!({
+
+
+
+                                "type": "scan",
+
+
+
+                                "status": "scanning",
+
+
+
+                                "count": total_count
+
+
+
+                            })
+
+
+
+                            .to_string(),
+
+
+
+                        );
+
+
+
+                    }
+
+
+
+                }
+
+
+
+        
+
+
+
+                // Flush remaining
+
+
+
+                if !batch.is_empty() {
+
+
+
+                    let mut g_lock = games_clone.lock().unwrap();
+
+
+
+                    g_lock.extend(batch);
+
+
+
+                }
+
+
+
+        
+
+
+
+                let duration = start_time.elapsed();
+
+
+
+                info!(
+
+
+
+                    "Scan complete. Indexed {} games in {:.2?}.",
+
+
+
+                    total_count, duration
+
+
+
+                );
+
+
+
+        
 
 
 
                 let _ = tx_scan.send(
 
+
+
                     serde_json::json!({
+
+
 
                         "type": "scan",
 
-                        "status": "scanning",
+
+
+                        "status": "complete",
+
+
 
                         "count": total_count
 
+
+
                     })
+
+
 
                     .to_string(),
 
+
+
                 );
 
-            }
-
-        }
 
 
-
-        // Flush remaining
-
-        if !batch.is_empty() {
-
-            let mut g_lock = games_clone.lock().unwrap();
-
-            g_lock.extend(batch);
-
-        }
+            });
 
 
 
-        let duration = start_time.elapsed();
-
-        info!(
-
-            "Scan complete. Indexed {} games in {:.2?}.",
-
-            total_count, duration
-
-        );
-
-
-
-        let _ = tx_scan.send(
-
-            serde_json::json!({
-
-                "type": "scan",
-
-                "status": "complete",
-
-                "count": total_count
-
-            })
-
-            .to_string(),
-
-        );
-
-    });
+        
 
 
     // Background task to calculate speeds and broadcast updates
@@ -1249,309 +1197,193 @@ struct AppState {
         }
     });
 
-        // File Watcher Task
+            // File Watcher Task
 
-        let games_dir_watch = settings.games_dir.clone();
+            let games_dir_watch = settings.games_dir.clone();
 
-        let data_dir_watch = settings.data_dir.clone();
+            let data_dir_watch = settings.data_dir.clone();
 
-        let games_watch = games.clone();
+            let games_watch = games.clone();
 
-        let tx_watch = tx.clone();
+            let tx_watch = tx.clone();
 
-        let img_tx_watch = img_tx.clone(); // If we want to queue images on create
+            let metadata_watch = metadata.clone();
 
-        let metadata_watch = metadata.clone();
+        
 
-    
+            tokio::task::spawn_blocking(move || {
 
-        tokio::task::spawn_blocking(move || {
+                let (std_tx, std_rx) = channel();
 
-            let (std_tx, std_rx) = channel();
+        
 
-    
+                let watcher = RecommendedWatcher::new(std_tx, Config::default());
 
-            let watcher = RecommendedWatcher::new(std_tx, Config::default());
+                let mut watcher = match watcher {
 
-            let mut watcher = match watcher {
-
-                Ok(w) => w,
-
-                Err(e) => {
-
-                    error!("Failed to create watcher: {:?}", e);
-
-                    return;
-
-                }
-
-            };
-
-    
-
-            if let Err(e) = watcher.watch(&games_dir_watch, RecursiveMode::Recursive) {
-
-                error!("Failed to watch games directory: {:?}", e);
-
-                return;
-
-            }
-
-    
-
-            info!("File watcher started for: {:?}", games_dir_watch);
-
-    
-
-            for res in std_rx {
-
-                let event = match res {
-
-                    Ok(e) => e,
-
-    
+                    Ok(w) => w,
 
                     Err(e) => {
 
-                        error!("Watch error: {:?}", e);
+                        error!("Failed to create watcher: {:?}", e);
 
-    
-
-                        continue;
+                        return;
 
                     }
 
                 };
 
-    
+        
 
-                match event.kind {
+                if let Err(e) = watcher.watch(&games_dir_watch, RecursiveMode::Recursive) {
 
-                    EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+                    error!("Failed to watch games directory: {:?}", e);
 
-                        // Renaming: paths[0] is from, paths[1] is to
+                    return;
 
-    
+                }
 
-                        if event.paths.len() != 2 {
+        
+
+                info!("File watcher started for: {:?}", games_dir_watch);
+
+        
+
+                for res in std_rx {
+
+                    let event = match res {
+
+                        Ok(e) => e,
+
+        
+
+                        Err(e) => {
+
+                            error!("Watch error: {:?}", e);
+
+        
 
                             continue;
 
                         }
 
-    
+                    };
 
-                        let from = &event.paths[0];
+        
 
-    
+                    match event.kind {
 
-                        let to = &event.paths[1];
+                        EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
 
-    
+                            // Renaming: paths[0] is from, paths[1] is to
 
-                        let mut games = games_watch.lock().unwrap();
+        
 
-    
+                            if event.paths.len() != 2 {
 
-                        // Remove old
+                                continue;
 
-    
+                            }
 
-                        if let Some(idx) = games.iter().position(|g| g.path == *from) {
+        
 
-                            games.remove(idx);
+                            let from = &event.paths[0];
 
-    
+        
 
-                            let _ = tx_watch.send(
+                            let to = &event.paths[1];
 
-                                serde_json::json!({
+        
 
-    
+                            let mut games = games_watch.lock().unwrap();
 
-                                   "type": "scan",
+        
 
-    
+                            // Remove old
 
-                                   "status": "remove",
+        
 
-    
+                            if let Some(idx) = games.iter().position(|g| g.path == *from) {
 
-                                   "path": from
+                                games.remove(idx);
 
-    
+        
 
-                                })
+                                let _ = tx_watch.send(
 
-                                .to_string(),
+                                    serde_json::json!({
 
-                            );
+        
 
-                        }
+                                       "type": "scan",
 
-    
+        
 
-                        drop(games); // release lock before processing new
+                                       "status": "remove",
 
-    
+        
 
-                                                // Add new
+                                       "path": from
 
-    
+        
 
-                                                let handle = tokio::runtime::Handle::current();
+                                    })
 
-    
+                                    .to_string(),
 
-                                                let meta_provider = handle.block_on(metadata_watch.lock());
+                                );
 
-    
+                            }
 
-                                                let game = match process_entry(to, &games_dir_watch, &data_dir_watch, Some(&meta_provider)) {
+        
 
-    
+                            drop(games); // release lock before processing new
 
-                        
+        
 
-                            Some(g) => g,
+                            // Add new
 
-    
+                            let handle = tokio::runtime::Handle::current();
 
-                            None => continue,
+                            let meta_provider = handle.block_on(metadata_watch.lock());
 
-                        };
-
-    
-
-                        // Queue image
-
-    
-
-                        if game.image_url.is_none() && let Some(ref tid) = game.title_id {
-
-                            let _ = img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
-
-                        }
-
-    
-
-                        let mut games = games_watch.lock().unwrap();
-
-    
-
-                        games.push(game.clone());
-
-    
-
-                        let _ = tx_watch.send(
-
-                            serde_json::json!({
-
-    
-
-                               "type": "scan",
-
-    
-
-                               "status": "update",
-
-    
-
-                               "game": game
-
-    
-
-                            })
-
-                            .to_string(),
-
-                        );
-
-                    }
-
-    
-
-                    EventKind::Create(_) | EventKind::Modify(_) => {
-
-                        for path in event.paths {
-
-                                                    if !path.is_file() {
-
-                                                        continue;
-
-                                                    }
-
-                            
-
-                                                    let handle = tokio::runtime::Handle::current();
-
-                                                    let meta_provider = handle.block_on(metadata_watch.lock());
-
-                                                    let game = match process_entry(&path, &games_dir_watch, &data_dir_watch, Some(&meta_provider)) {
-
-                            
+                            let game = match process_entry(to, &games_dir_watch, &data_dir_watch, Some(&meta_provider)) {
 
                                 Some(g) => g,
 
-    
+        
 
                                 None => continue,
 
                             };
 
-    
-
-                            info!("Watcher: Game detected/updated: {}", game.name);
-
-    
-
-                            // Queue image download if new and missing
-
-    
-
-                            if game.image_url.is_none() && let Some(ref tid) = game.title_id {
-
-                                let _ =
-
-                                    img_tx_watch.blocking_send((tid.clone(), game.path.clone()));
-
-                            }
-
-    
+        
 
                             let mut games = games_watch.lock().unwrap();
 
-    
+        
 
-                            if let Some(idx) = games.iter().position(|g| g.path == game.path) {
+                            games.push(game.clone());
 
-                                games[idx] = game.clone();
-
-                            } else {
-
-                                games.push(game.clone());
-
-                            }
-
-    
+        
 
                             let _ = tx_watch.send(
 
                                 serde_json::json!({
 
-    
+        
 
                                    "type": "scan",
 
-    
+        
 
                                    "status": "update",
 
-    
+        
 
                                    "game": game
 
-    
+        
 
                                 })
 
@@ -1561,47 +1393,143 @@ struct AppState {
 
                         }
 
-                    }
+        
 
-    
+                        EventKind::Create(_) | EventKind::Modify(_) => {
 
-                    EventKind::Remove(_) => {
+                            for path in event.paths {
 
-                        for path in event.paths {
+                                if !path.is_file() {
 
-                            let mut games = games_watch.lock().unwrap();
+                                    continue;
 
-    
+                                }
 
-                            let idx = match games.iter().position(|g| g.path == path) {
+        
 
-                                Some(i) => i,
+                                let handle = tokio::runtime::Handle::current();
 
-    
+                                let meta_provider = handle.block_on(metadata_watch.lock());
 
-                                None => continue,
+                                let game = match process_entry(&path, &games_dir_watch, &data_dir_watch, Some(&meta_provider)) {
 
-                            };
+                                    Some(g) => g,
 
-    
+        
 
-                            let removed = games.remove(idx);
-                            info!("Watcher: Game removed: {}", removed.name);
+                                    None => continue,
 
-                            let _ = tx_watch.send(
-                                serde_json::json!({
-                                   "type": "scan",
-                                   "status": "remove",
-                                   "path": path
-                                })
-                                .to_string(),
-                            );
+                                };
+
+        
+
+                                info!("Watcher: Game detected/updated: {}", game.name);
+
+        
+
+                                let mut games = games_watch.lock().unwrap();
+
+        
+
+                                if let Some(idx) = games.iter().position(|g| g.path == game.path) {
+
+                                    games[idx] = game.clone();
+
+                                } else {
+
+                                    games.push(game.clone());
+
+                                }
+
+        
+
+                                let _ = tx_watch.send(
+
+                                    serde_json::json!({
+
+        
+
+                                       "type": "scan",
+
+        
+
+                                       "status": "update",
+
+        
+
+                                       "game": game
+
+        
+
+                                    })
+
+                                    .to_string(),
+
+                                );
+
+                            }
+
                         }
+
+        
+
+                        EventKind::Remove(_) => {
+
+                            for path in event.paths {
+
+                                let mut games = games_watch.lock().unwrap();
+
+        
+
+                                let idx = match games.iter().position(|g| g.path == path) {
+
+                                    Some(i) => i,
+
+        
+
+                                    None => continue,
+
+                                };
+
+        
+
+                                let removed = games.remove(idx);
+
+                                info!("Watcher: Game removed: {}", removed.name);
+
+        
+
+                                let _ = tx_watch.send(
+
+                                    serde_json::json!({
+
+                                       "type": "scan",
+
+                                       "status": "remove",
+
+                                       "path": path
+
+                                    })
+
+                                    .to_string(),
+
+                                );
+
+                            }
+
+                        }
+
+        
+
+                        _ => {}
+
                     }
-                    _ => {}
+
                 }
-            }
-        });
+
+            });
+
+        
 
     // --- Router Setup ---
 

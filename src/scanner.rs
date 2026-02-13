@@ -90,7 +90,7 @@ fn parse_filename(filename: &str) -> (String, Option<String>, Option<String>, St
 pub fn process_entry(
     path: &Path,
     root_dir: &Path,
-    data_dir: &Path,
+    _data_dir: &Path,
     metadata: Option<&crate::metadata::MetadataProvider>,
 ) -> Option<Game> {
     let valid_extensions = ["nsp", "nsz", "xci", "xcz"];
@@ -131,38 +131,6 @@ pub fn process_entry(
         latest_version = provider.get_latest_version(tid);
     }
 
-    // Check for image
-    let mut image_url = None;
-    let image_exts = ["jpg", "png", "jpeg", "webp"];
-
-    // 1. Check data_dir/images cache
-    if let Some(ref tid) = title_id {
-        for img_ext in image_exts {
-            let img_path = data_dir.join("images").join(format!("{}.{}", tid, img_ext));
-            if img_path.exists() {
-                image_url = Some(format!("/images/{}.{}", tid, img_ext));
-                break;
-            }
-        }
-    }
-
-    // 2. Check local file (fallback)
-    if image_url.is_none() {
-        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        for img_ext in image_exts {
-            let img_path = path.with_file_name(format!("{}.{}", file_stem, img_ext));
-            if img_path.exists() {
-                let rel_img = img_path
-                    .strip_prefix(root_dir)
-                    .unwrap_or(&img_path)
-                    .to_string_lossy()
-                    .to_string();
-                image_url = Some(rel_img);
-                break;
-            }
-        }
-    }
-
     Some(Game {
         name,
         path: path.to_path_buf(),
@@ -174,6 +142,6 @@ pub fn process_entry(
         latest_version,
         category,
         publisher,
-        image_url,
+        image_url: None,
     })
 }
