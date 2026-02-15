@@ -8,6 +8,11 @@ fn main() {
         return;
     }
 
+    if env::var("SKIP_FRONTEND_BUILD").is_ok() {
+        println!("cargo:warning=Skipping frontend build as SKIP_FRONTEND_BUILD is set");
+        return;
+    }
+
     println!("cargo:rerun-if-changed=frontend/src");
     println!("cargo:rerun-if-changed=frontend/index.html");
     println!("cargo:rerun-if-changed=frontend/package.json");

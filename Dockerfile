@@ -8,6 +8,14 @@ RUN npm run build
 
 # Stage 2: Build Backend
 FROM rust:1-slim-bookworm AS backend-builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 # Create empty shell project to cache dependencies
 RUN cargo new --bin switcheroo
@@ -20,6 +28,11 @@ RUN rm src/*.rs
 
 # Copy actual source code
 COPY src ./src
+COPY build.rs ./
+# Copy frontend dist from stage 1
+COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+# Skip frontend build in build.rs
+ENV SKIP_FRONTEND_BUILD=1
 # Touch main.rs to ensure rebuild
 RUN touch src/main.rs
 # Build the actual application
